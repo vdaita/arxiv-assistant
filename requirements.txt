@@ -1,0 +1,6 @@
+paperscraper
+pandas
+numpy
+openai
+chainlit
+sentence-transformers
