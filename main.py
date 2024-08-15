@@ -17,8 +17,8 @@ categories = ["cat:cs.AI", "cat:cs.LG", "cat:cs.CL"]
 papers_df = []
 for cat in categories:
     papers_df.append(paperscraper.arxiv.get_arxiv_papers(
-        cat, max_results=MAX_NUMBER_PAPERS_PER_CAT,  # Get papers by category with max 100 results
-        search_options={'sort_by': paperscraper.arxiv.arxiv.SortCriterion.SubmittedDate}))  # Sort papers by submission date
+        cat, max_results=MAX_NUMBER_PAPERS_PER_CAT,
+        search_options={'sort_by': paperscraper.arxiv.arxiv.SortCriterion.SubmittedDate}))
 papers_df = pd.concat(papers_df).drop_duplicates()  # Concatenate papers and remove duplicates
 papers_df['title_abs'] = papers_df['title'].str.cat(papers_df['abstract'], sep = model.tokenizer.sep_token) # Creating single string for each paper with title + abstract
 
