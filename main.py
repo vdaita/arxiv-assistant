@@ -11,6 +11,7 @@ import chainlit as cl
 # Initialize SentenceTransformer model
 model = SentenceTransformer("msmarco-distilbert-dot-v5")
 MAX_NUMBER_PAPERS_PER_CAT = 100 
+TOP_K = 5
 categories = ["cat:cs.AI", "cat:cs.LG", "cat:cs.CL"]
 
 # Loading data into papers dataframe
@@ -45,7 +46,7 @@ def start_chat():
 def search_papers(query: str):
     # Compute query embedding using SentenceTransformer and semantic search
     query_embedding = model.encode(query)
-    top5 = util.semantic_search(query_embedding, corpus_embedding, top_k=5)
+    top5 = util.semantic_search(query_embedding, corpus_embedding, top_k=TOP_K)
 
     tool_output = ""
     # Iterate over top 5 results and construct output
