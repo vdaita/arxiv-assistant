@@ -4,3 +4,4 @@ numpy
 openai
 chainlit
 sentence-transformers
+PyMuPDF
