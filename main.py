@@ -129,53 +129,54 @@ async def on_message(message: cl.Message):
     msg = cl.Message(content="")
     await msg.send()
 
-    # Stream response using OpenAI
-    stream = await client.chat.completions.create(
-        messages=message_history,
-        **settings,
-        stream=True,
-    )
-
-    # Process response stream
-    async for part in stream:
-        if token := part.choices[0].delta.content or "":
-            await msg.stream_token(token)
-
-    print("Message content: ", message.content)
-
-    # Model should send response 'Search "query string for sentence transformer"' if it wants to make a query - processing for that below
-    # Not using tools right now - seems to adhere to the format well enough in a couple tests.
-    # Check if search query is present in message
-    if is_search_query(message.content):
-        print("Processing search query")
-
-        overarching_prompt = 'In one quotation mark, write down general search queries that can narrow down the papers. Example: "large language models, inference"'
-        # print("Message history: ", message_history)
-        message_history.append({
-            "role": "user",
-            "content": overarching_prompt
-        })
-        overarching_topic = await client.chat.completions.create(
-            messages=message_history,
-            **settings
-        )
-        message_history.pop(-1)
-        overarching_topic = overarching_topic.choices[0].message.content
-        print("Overarching topic query response: ", overarching_topic)
-        search_query = overarching_topic.split('"')[1].split('"')[0]
-        await msg.stream_token(f"\nQuerying Arxiv: {search_query}")
-        await load_papers_from_arxiv(search_query)
-        await msg.stream_token(f"\nFinished loading papers from arxiv.")
-
-        query = str(msg.content).split("Search")[1].split('"')[1]
-        response = search_papers(query)
-        await msg.stream_token("\n" + response)
-    
     if "load pdf url" in message.content.lower():
         print("Loading PDF")
         url = message.content.lower().split(" ")[-1]
         text = pdf_url_to_markdown(url)
         await msg.stream_token(f"\n# Retrieved PDF Paper\n{text}")
+    else:
+        # Stream response using OpenAI
+        stream = await client.chat.completions.create(
+            messages=message_history,
+            **settings,
+            stream=True,
+        )
+
+        # Process response stream
+        async for part in stream:
+            if token := part.choices[0].delta.content or "":
+                await msg.stream_token(token)
+
+        print("Message content: ", message.content)
+
+        # Model should send response 'Search "query string for sentence transformer"' if it wants to make a query - processing for that below
+        # Not using tools right now - seems to adhere to the format well enough in a couple tests.
+        # Check if search query is present in message
+        if is_search_query(message.content):
+            print("Processing search query")
+
+            overarching_prompt = 'In one quotation mark, write down general search queries that can narrow down the papers. Example: "large language models, inference"'
+            # print("Message history: ", message_history)
+            message_history.append({
+                "role": "user",
+                "content": overarching_prompt
+            })
+            overarching_topic = await client.chat.completions.create(
+                messages=message_history,
+                **settings
+            )
+            message_history.pop(-1)
+            overarching_topic = overarching_topic.choices[0].message.content
+            print("Overarching topic query response: ", overarching_topic)
+            search_query = overarching_topic.split('"')[1].split('"')[0]
+            await msg.stream_token(f"\nQuerying Arxiv: {search_query}")
+            await load_papers_from_arxiv(search_query)
+            await msg.stream_token(f"\nFinished loading papers from arxiv.")
+
+            query = str(msg.content).split("Search")[1].split('"')[1]
+            response = search_papers(query)
+            await msg.stream_token("\n" + response)
+    
 
     # Append response to message history and show user
     message_history.append({"role": "assistant", "content": msg.content}) 
