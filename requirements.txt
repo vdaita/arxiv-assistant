@@ -1,9 +1,10 @@
-paperscraper
+arxiv
 pandas
 numpy
 openai
 streamlit
 rich
-PyMuPDF
 gensim
 scikit-learn
+stqdm
+requests

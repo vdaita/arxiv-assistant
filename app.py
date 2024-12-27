@@ -1,47 +1,49 @@
-import paperscraper
+import arxiv
+
 from typing import List
 import pandas as pd
 import numpy as np
 from openai import AsyncOpenAI, OpenAI
 import streamlit as st
-import fitz
-from io import BytesIO
 
-from gensim.models import KeyedVectors
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 import json
 
 # Load fasttext model from the web
-fasttext_model = KeyedVectors.load_word2vec_format("https://dl.fbaipublicfiles.com/fasttext/vectors-english/wiki-news-300d-1M.vec.zip")
+from get_top_documents import get_topk_documents
+from stqdm import stqdm
 
+# Check if the fasttext model file exists locally
 GENERATE_QUERIES_PROMPT = """
-From the chat history provided and the query below, generate a series of {query_count} keyword-based queries that be used to retrieve the right information.
+From the chat history provided and the query below, generate a series of {query_count} keyword-based queries that be used to retrieve the right information. They should be comma separated terms. This is being used for search on arXiv, so these have to be simple and direct queries.
 Use the following format to generate the queries:
 
 ```json
-{
+{{
     "queries": [
         "query 1",
         "query 2",
         "query 3",
         ...
     ]
-}
+}}
 ```
 """
 
+ANSWER_QUESTION_PROMPT = """
+Based on the documents and the questions to answer, provide a detailed response to the user. Make sure that you include citations and references to the documents provided.
+"""
+
 with st.expander("Model settings"):
-    api_base = st.text_input("OpenAI-compatible API base URL", "https://api.openai.com")
+    api_base = st.text_input("OpenAI-compatible API base URL", "https://api.openai.com/v1/")
     api_key = st.text_input("API key")
     model_name = st.text_input("Model name", "gpt-4o-mini")
     max_new_tokens = st.number_input("Max tokens per response", 2048)
 
 with st.expander("Retrieval settings"):
-    top_k = st.number_input("Per query, how many papers to send to LLM")
-    max_papers_retrieved = st.number_input("Per query, how many papers to retrieve from Arxiv")
-    max_num_queries = st.number_input("Number of queries to generate per request")
+    top_k = st.number_input("Per query, how many papers to send to LLM", value=5)
+    max_papers_retrieved = st.number_input("Per query, how many papers to retrieve from Arxiv", value=500)
+    max_num_queries = st.number_input("Number of queries to generate per request", value=4)
 
 should_query = st.checkbox("Querying on")
 
@@ -60,56 +62,18 @@ def extract_queries_from_response(md_response: str):
         queries = []
     return queries
 
+
 def get_papers(query: str):
-    papers = paperscraper.arxiv.get_papers(
-        query,
+    search = arxiv.Search(
+        query=query,
         max_results=max_papers_retrieved,
-        search_options={
-            'sort_by': paperscraper.arxiv.arxiv.SortCriterion.SubmittedDate
-        }
+        sort_by=arxiv.SortCriterion.SubmittedDate
     )
-    papers = pd.DataFrame(papers)
-    # TODO: add the link to the paper
-    print(papers.columns)
-    papers["title_abs"] = papers["title"].str.cat(papers["abstract"], sep="\n")
-    return papers["title_abs"].tolist()
-
-def get_topk_documents(docs: List[str], query: str, top_k: int = 5):
-    # Use tf-idf vectorizer over the data + query
-    vectorizer = TfidfVectorizer()
-    tfidf_matrix = vectorizer.fit_transform(docs + [query])
-    vocab = vectorizer.get_feature_names_out()
-
-    doc_embeddings = []
-
-    # Create a weighted embedding using trained fasttext
-    for doc_index, doc in enumerate(docs):
-        doc_embedding = np.zeros(fasttext_model.vector_size)
-        total_weight = 0
-        for word, weight in zip(vocab, tfidf_matrix[doc_index]):
-            if word in fasttext_model.key_to_index:
-                doc_embedding += fasttext_model[word] * weight
-                total_weight += weight
-        if total_weight > 0:
-            doc_embedding /= total_weight
-        doc_embeddings.append(doc_embedding)
-
-    # Calculate cosine similarity between the query and each document
-    query_embedding = np.zeros(fasttext_model.vector_size)
-    total_weight = 0
-    for word, weight in zip(vocab, tfidf_matrix[-1]):
-        if word in fasttext_model.key_to_index:
-            query_embedding += fasttext_model[word] * weight
-            total_weight += weight
-    
-    if total_weight > 0:
-        query_embedding /= total_weight
-    
-    similarities = cosine_similarity([query_embedding], doc_embeddings)
-    top_k_indices = np.argsort(similarities[0])[-top_k:]
-
-    # TODO: visualize the documents
-    return [docs[i] for i in top_k_indices]
+    papers = []
+    for result in search.results():
+        title_abs = f"{result.title}\n[{result.pdf_url}]({result.pdf_url})\n{result.summary}"
+        papers.append(title_abs)
+    return papers
 
 def retrieve_documents(query: str, client: OpenAI):
     # Ask API to generate JSON list of candidate keyword search queries {query: ["search query 1", "search query 2", ...]}
@@ -123,13 +87,20 @@ def retrieve_documents(query: str, client: OpenAI):
         stream=False
     )
     # Extract JSON
-    queries = extract_queries_from_response(response.choices[0].delta.content)
+    queries = extract_queries_from_response(response.choices[0].message.content)
+    st.markdown("## Generated queries")
+    for query in queries:
+        st.markdown(f"- {query}")
 
     # For each search query, retrieve relevant papers from Arxiv
     all_papers = []
-    for query in queries:
-        papers = get_papers(query)
-        all_papers.extend(papers)
+    for query in stqdm(queries, desc="Loading papers from Arxiv"):
+        try:
+            papers = get_papers(query)
+            all_papers.extend(papers)
+        except Exception as e:
+            print(f"Error retrieving papers for query '{query}': {e}")
+            st.error(f"Error retrieving papers for query '{query}': {e}")
     
     # De-deuplicate papers
     all_papers = list(set(all_papers))
@@ -161,7 +132,7 @@ def answer_question(query: str):
     
     with st.chat_message("assistant"):
         response = client.chat.completions.create(
-            messages=st.session_state.messages,
+            messages=[{"role": "system", "content": ANSWER_QUESTION_PROMPT}, {"role": "user", "content": "# Documents\n" + "\n".join(documents)}] + st.session_state.messages,
             model=model_name,
             max_tokens=max_new_tokens,
             temperature=0.5,
@@ -169,9 +140,16 @@ def answer_question(query: str):
         )
         st.write_stream(response)
 
-    
-
 user_query = st.chat_input("What's your question?")
+clear_chat_button = st.button("Clear chat")
+
+if clear_chat_button:
+    st.session_state.messages = []
+    st.session_state.documents = []
+
+if user_query:
+    st.session_state.messages.append({"role": "user", "content": user_query})
+    answer_question(user_query)
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
