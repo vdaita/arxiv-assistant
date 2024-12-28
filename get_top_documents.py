@@ -39,7 +39,6 @@ def get_topk_documents(docs: List[str], query: str, top_k: int = 5):
     tfidf_matrix = coo_matrix(tfidf_matrix)
 
     for row, col, data in stqdm(zip(tfidf_matrix.row, tfidf_matrix.col, tfidf_matrix.data), desc="Embedding documents using Fasttext and TF-IDF"):
-        print(f"Processing {row}, {col}, {data}")
         if vocab[col] in fasttext_model_keys:
             doc_embeddings[row] += fasttext_model[vocab[col]] * data
             doc_weights[row] += data

@@ -8,42 +8,31 @@ import streamlit as st
 
 import numpy as np
 import json
+from prompts import GENERATE_QUERIES_PROMPT, ANSWER_QUESTION_PROMPT
 
 # Load fasttext model from the web
 from get_top_documents import get_topk_documents
+import tiktoken
 from stqdm import stqdm
 
-# Check if the fasttext model file exists locally
-GENERATE_QUERIES_PROMPT = """
-From the chat history provided and the query below, generate a series of {query_count} keyword-based queries that be used to retrieve the right information. They should be comma separated terms. This is being used for search on arXiv, so these have to be simple and direct queries.
-Use the following format to generate the queries:
-
-```json
-{{
-    "queries": [
-        "query 1",
-        "query 2",
-        "query 3",
-        ...
-    ]
-}}
-```
-"""
-
-ANSWER_QUESTION_PROMPT = """
-Based on the documents and the questions to answer, provide a detailed response to the user. Make sure that you include citations and references to the documents provided.
-"""
+enc = tiktoken.encoding_for_model("gpt-4o-mini")
 
 with st.expander("Model settings"):
     api_base = st.text_input("OpenAI-compatible API base URL", "https://api.openai.com/v1/")
     api_key = st.text_input("API key")
     model_name = st.text_input("Model name", "gpt-4o-mini")
+    max_input_tokens = st.text_input("Maximum input tokens", 32000)
     max_new_tokens = st.number_input("Max tokens per response", 2048)
 
 with st.expander("Retrieval settings"):
     top_k = st.number_input("Per query, how many papers to send to LLM", value=5)
     max_papers_retrieved = st.number_input("Per query, how many papers to retrieve from Arxiv", value=500)
     max_num_queries = st.number_input("Number of queries to generate per request", value=4)
+
+input_token_count = 0
+output_token_count = 0
+st.metric(label="Input token count (gpt-4o-mini encoding)", value=input_token_count)
+st.metric(label="Output token count (gpt-4o-mini encoding)", value=output_token_count)
 
 should_query = st.checkbox("Querying on")
 
@@ -75,19 +64,62 @@ def get_papers(query: str):
         papers.append(title_abs)
     return papers
 
-def retrieve_documents(query: str, client: OpenAI):
-    # Ask API to generate JSON list of candidate keyword search queries {query: ["search query 1", "search query 2", ...]}
+def make_openai_request(system_prompt: str, documents: List[str], query: str, max_new_tokens=max_new_tokens) -> str:
+    global input_token_count, output_token_count
+    client = OpenAI(
+        base_url=api_base,
+        api_key=api_key
+    )
+
+    messages = [{"role": "system", "content": system_prompt}] + [{"role": "user", "content": "\n".join(doc for doc in documents) + f"\n{query}"}]
+    
+    request_tokens = sum([len(enc.encode(m["content"])) for m in messages])
+    if request_tokens > max_input_tokens:
+        remaining_tokens = max_input_tokens - len(enc.encode(messages[0]["content"])) - len(enc.encode(messages[-1]["content"]))
+        constructed_documents = []
+        
+        current_documents = []
+        current_documents_length = 0
+        for doc in documents:
+            doc_tokens = len(enc.encode(doc))
+            if current_documents_length + doc_tokens > remaining_tokens:
+                constructed_documents.append(current_documents)
+                current_documents = []
+                current_documents_length = 0
+            current_documents.append(doc)
+        
+        if len(current_documents) > 0:
+            constructed_documents.append(current_documents)
+
+        documents = []
+        for i in range(len(constructed_documents)):
+            documents.append(
+                make_openai_request(system_prompt, constructed_documents[i], query)
+            )
+
+    input_token_count += request_tokens
+
     response = client.chat.completions.create(
-        messages=[
-            {"role": "system", "content": GENERATE_QUERIES_PROMPT.format(query_count=max_num_queries)},
-        ] + st.session_state.messages,
+        messages=messages,
         model=model_name,
-        max_tokens=min(256, max_new_tokens),
+        max_tokens=max_new_tokens,
         temperature=0.5,
         stream=False
     )
-    # Extract JSON
-    queries = extract_queries_from_response(response.choices[0].message.content)
+
+    response = response.choices[0].message.content
+
+    output_token_count += len(enc.encode(response))
+    return response
+
+def retrieve_documents(query: str, client: OpenAI):
+    # Ask API to generate JSON list of candidate keyword search queries {query: ["search query 1", "search query 2", ...]}
+    queries = extract_queries_from_response(
+        GENERATE_QUERIES_PROMPT.format(query_count=max_num_queries), 
+        [], 
+        query, 
+        max_new_tokens=min(256, max_new_tokens)
+    )
     st.markdown("## Generated queries")
     for query in queries:
         st.markdown(f"- {query}")
@@ -101,10 +133,12 @@ def retrieve_documents(query: str, client: OpenAI):
         except Exception as e:
             print(f"Error retrieving papers for query '{query}': {e}")
             st.error(f"Error retrieving papers for query '{query}': {e}")
-    
     # De-deuplicate papers
     all_papers = list(set(all_papers))
-
+    
+    for i in range(len(all_papers)):
+        all_papers[i] = f"# Document {i + 1}\n{all_papers[i]}"
+    
     # Visual representation of the papers retrieved
     best_papers = get_topk_documents(all_papers, query, top_k)
     return best_papers
@@ -129,25 +163,29 @@ def answer_question(query: str):
 
         documents += retrieved_documents
         st.session_state.documents = documents
+
+    # TODO: add clustering for visualizations
+    # TODO: add streaming response
     
     with st.chat_message("assistant"):
-        response = client.chat.completions.create(
-            messages=[{"role": "system", "content": ANSWER_QUESTION_PROMPT}, {"role": "user", "content": "# Documents\n" + "\n".join(documents)}] + st.session_state.messages,
-            model=model_name,
-            max_tokens=max_new_tokens,
-            temperature=0.5,
-            stream=True
+        st.markdown(
+            make_openai_request(
+                system_prompt=ANSWER_QUESTION_PROMPT,
+                documents=documents,
+                query=query
+            )
         )
-        st.write_stream(response)
 
 user_query = st.chat_input("What's your question?")
-clear_chat_button = st.button("Clear chat")
+# clear_chat_button = st.button("Clear chat")
 
-if clear_chat_button:
-    st.session_state.messages = []
-    st.session_state.documents = []
+# if clear_chat_button:
+#     st.session_state.messages = []
+#     st.session_state.documents = []
 
 if user_query:
+    st.session_state.messages = []
+    st.session_state.documents = []
     st.session_state.messages.append({"role": "user", "content": user_query})
     answer_question(user_query)
 

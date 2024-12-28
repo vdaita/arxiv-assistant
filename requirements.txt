@@ -8,3 +8,4 @@ gensim
 scikit-learn
 stqdm
 requests
+tiktoken
