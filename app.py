@@ -11,7 +11,7 @@ import json
 from prompts import GENERATE_QUERIES_PROMPT, ANSWER_QUESTION_PROMPT
 
 # Load fasttext model from the web
-from get_top_documents import get_topk_documents, get_fasttext_model
+from get_top_documents import get_topk_documents_word2vec, get_fasttext_model
 import tiktoken
 from stqdm import stqdm
 
@@ -24,6 +24,7 @@ with st.expander("Model settings"):
     model_name = st.text_input("Model name", "gpt-4o-mini")
     max_input_tokens = st.number_input("Maximum input tokens", value=32000)
     max_new_tokens = st.number_input("Max tokens per response", value=2048)
+    temperature = st.number_input("Temperature", value=0.5)
 
 with st.expander("Retrieval settings"):
     top_k = st.number_input("Per query, how many papers to send to LLM", value=5)
@@ -65,7 +66,7 @@ def get_papers(query: str):
         papers.append(title_abs)
     return papers
 
-def make_openai_request(system_prompt: str, documents: List[str], query: str,  max_new_tokens: int = max_new_tokens) -> str:
+def make_openai_request(system_prompt: str, documents: List[str], query: str, max_new_tokens: int = max_new_tokens, title="Final response", stream_and_show_output: bool = True) -> str:
     global input_token_count, output_token_count
     client = OpenAI(
         base_url=api_base,
@@ -76,40 +77,57 @@ def make_openai_request(system_prompt: str, documents: List[str], query: str,  m
     
     request_tokens = sum([len(enc.encode(m["content"])) for m in messages])
     if request_tokens > max_input_tokens:
-        remaining_tokens = max_input_tokens - len(enc.encode(messages[0]["content"])) - len(enc.encode(messages[-1]["content"]))
+        remaining_tokens = max_input_tokens - len(enc.encode(system_prompt)) - len(enc.encode(query))
         constructed_documents = []
         
         current_documents = []
         current_documents_length = 0
-        for doc in documents:
+        for doc_idx, doc in enumerate(documents):
             doc_tokens = len(enc.encode(doc))
+            print(f"Document {doc_idx} has {doc_tokens} tokens")
             if current_documents_length + doc_tokens > remaining_tokens:
                 constructed_documents.append(current_documents)
                 current_documents = []
                 current_documents_length = 0
             current_documents.append(doc)
+            current_documents_length += doc_tokens
         
         if len(current_documents) > 0:
             constructed_documents.append(current_documents)
 
+        for i in range(len(constructed_documents)):
+            print("Document group length, ", i, ": ", len(constructed_documents[i]))
+
         documents = []
+        documents_seen = 0
         for i in range(len(constructed_documents)):
             documents.append(
-                make_openai_request(system_prompt, constructed_documents[i], query)
+                make_openai_request(system_prompt, constructed_documents[i], query, title=f"Response for documents {documents_seen + 1} to {documents_seen + len(constructed_documents[i])}")
             )
+            documents_seen += len(constructed_documents[i])
 
     input_token_count += request_tokens
     input_token_count_placeholder.metric(label="Input tokens (gpt-4o encoding)", value=input_token_count, delta=request_tokens)
 
-    response = client.chat.completions.create(
-        messages=messages,
-        model=model_name,
-        max_tokens=max_new_tokens,
-        temperature=0.5,
-        stream=False
-    )
+    if stream_and_show_output:
+        st.markdown(f"# {title}")
+        response = st.write_stream(client.chat.completions.create(
+            messages=messages,
+            model=model_name,
+            max_tokens=max_new_tokens,
+            temperature=temperature,
+            stream=True
+        ))
+    else:
+        response = client.chat.completions.create(
+            messages=messages,
+            model=model_name,
+            max_tokens=max_new_tokens,
+            temperature=temperature,
+            stream=False
+        )
+        response = response.choices[0].message.content
 
-    response = response.choices[0].message.content
     response_length = len(enc.encode(response))
 
     output_token_count += response_length
@@ -124,7 +142,8 @@ def retrieve_documents(query: str, client: OpenAI):
             GENERATE_QUERIES_PROMPT.format(query_count=max_num_queries), 
             [], 
             query, 
-            max_new_tokens=min(256, max_new_tokens)
+            max_new_tokens=min(256, max_new_tokens),
+            stream_and_show_output=False
         )
     )
     st.markdown("## Generated queries")
@@ -143,11 +162,8 @@ def retrieve_documents(query: str, client: OpenAI):
     # De-deuplicate papers
     all_papers = list(set(all_papers))
     
-    for i in range(len(all_papers)):
-        all_papers[i] = f"### Document {i + 1}\n## {all_papers[i]}"
-    
     # Visual representation of the papers retrieved
-    best_papers = get_topk_documents(fasttext_model, all_papers, query, top_k)
+    best_papers = get_topk_documents_word2vec(fasttext_model, all_papers, query, top_k)
     return best_papers
 
 def answer_question(query: str):
@@ -160,19 +176,23 @@ def answer_question(query: str):
     if should_query:
         retrieved_documents = retrieve_documents(query, client)
 
+        for i in range(len(retrieved_documents)):
+            retrieved_documents[i] = f"Document {i + 1} {retrieved_documents[i]}"
+
+        # TODO: sort the retrieved documents by their number
+
         st.title("Retrieved documents")
         if len(retrieved_documents) == 0:
             st.write("No documents retrieved")
         else:
             for doc in retrieved_documents:
                 with st.expander(doc.split("\n")[0]):
-                    st.write(doc)
+                    st.write(f"### {doc}")
 
         documents += retrieved_documents
         st.session_state.documents = documents
 
     # TODO: add clustering for visualizations
-    # TODO: add streaming response
     
     with st.chat_message("assistant"):
         st.markdown(

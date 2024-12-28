@@ -28,7 +28,7 @@ def get_fasttext_model():
         st.write(f"Loaded GloVe model in {end_time - start_time} seconds")
     return glove_model
 
-def get_topk_documents(fasttext_model, docs: List[str], query: str, top_k: int = 5):
+def get_topk_documents_word2vec(fasttext_model, docs: List[str], query: str, top_k: int = 5):
     fasttext_model_keys = set(fasttext_model.key_to_index.keys())
     # Use tf-idf vectorizer over the data + query
     vectorizer = TfidfVectorizer()
@@ -60,4 +60,4 @@ def get_topk_documents(fasttext_model, docs: List[str], query: str, top_k: int =
     return [docs[i] for i in top_k_indices]
 
 if __name__ == "__main__":
-    get_topk_documents(["hello world", "world hello"], "hello", 1)
+    get_topk_documents_word2vec(["hello world", "world hello"], "hello", 1)

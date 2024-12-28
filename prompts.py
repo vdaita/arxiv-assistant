@@ -15,5 +15,5 @@ Use the following format to generate the queries:
 """
 
 ANSWER_QUESTION_PROMPT = """
-Based on the documents and the questions to answer, provide a detailed response to the user. Make sure that you include citations and references to the documents provided.
+Based on the documents and the questions to answer, provide a detailed response to the user. Make sure that you include citations and references to the documents provided, including with the provided document number.
 """

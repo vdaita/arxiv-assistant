@@ -5,3 +5,6 @@ I'm currently rewriting this using Streamlit to allow me to give users more cust
 - Pick which LLM you want to infer from
 - From the UI, select how many papers you want to retrieve
 - Disable or enable retrieving more papers
+
+## Known issues
+- If your "Maximum input tokens" is smaller than the size of one abstract, there can be issues. 
