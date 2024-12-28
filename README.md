@@ -6,6 +6,10 @@ I'm currently rewriting this using Streamlit to allow me to give users more cust
 - From the UI, select how many papers you want to retrieve
 - Disable or enable retrieving more papers
 
+## Run the app
+
+Run `streamlit run app.py`. Configuration (API keys, models, etc.) is within the UI. 
+
 ## Known issues
 - If your "Maximum input tokens" is smaller than the size of one abstract, there can be issues. 
 
