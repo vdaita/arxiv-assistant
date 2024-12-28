@@ -8,4 +8,4 @@ gensim
 scikit-learn
 stqdm
 requests
-tiktoken
+tiktoken>=0.80.0

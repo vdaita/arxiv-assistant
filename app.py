@@ -11,18 +11,19 @@ import json
 from prompts import GENERATE_QUERIES_PROMPT, ANSWER_QUESTION_PROMPT
 
 # Load fasttext model from the web
-from get_top_documents import get_topk_documents
+from get_top_documents import get_topk_documents, get_fasttext_model
 import tiktoken
 from stqdm import stqdm
 
 enc = tiktoken.encoding_for_model("gpt-4o-mini")
+fasttext_model = get_fasttext_model()
 
 with st.expander("Model settings"):
     api_base = st.text_input("OpenAI-compatible API base URL", "https://api.openai.com/v1/")
     api_key = st.text_input("API key")
     model_name = st.text_input("Model name", "gpt-4o-mini")
-    max_input_tokens = st.text_input("Maximum input tokens", 32000)
-    max_new_tokens = st.number_input("Max tokens per response", 2048)
+    max_input_tokens = st.number_input("Maximum input tokens", value=32000)
+    max_new_tokens = st.number_input("Max tokens per response", value=2048)
 
 with st.expander("Retrieval settings"):
     top_k = st.number_input("Per query, how many papers to send to LLM", value=5)
@@ -31,10 +32,10 @@ with st.expander("Retrieval settings"):
 
 input_token_count = 0
 output_token_count = 0
-st.metric(label="Input token count (gpt-4o-mini encoding)", value=input_token_count)
-st.metric(label="Output token count (gpt-4o-mini encoding)", value=output_token_count)
+input_token_count_placeholder = st.empty()
+output_token_count_placeholder = st.empty()
 
-should_query = st.checkbox("Querying on")
+should_query = st.checkbox("Querying on", value=True)
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -60,11 +61,11 @@ def get_papers(query: str):
     )
     papers = []
     for result in search.results():
-        title_abs = f"{result.title}\n[{result.pdf_url}]({result.pdf_url})\n{result.summary}"
+        title_abs = f"{result.title}  \n\n[{result.pdf_url}]({result.pdf_url})  \n\n{result.summary}  "
         papers.append(title_abs)
     return papers
 
-def make_openai_request(system_prompt: str, documents: List[str], query: str, max_new_tokens=max_new_tokens) -> str:
+def make_openai_request(system_prompt: str, documents: List[str], query: str,  max_new_tokens: int = max_new_tokens) -> str:
     global input_token_count, output_token_count
     client = OpenAI(
         base_url=api_base,
@@ -98,6 +99,7 @@ def make_openai_request(system_prompt: str, documents: List[str], query: str, ma
             )
 
     input_token_count += request_tokens
+    input_token_count_placeholder.metric(label="Input tokens (gpt-4o encoding)", value=input_token_count, delta=request_tokens)
 
     response = client.chat.completions.create(
         messages=messages,
@@ -108,17 +110,22 @@ def make_openai_request(system_prompt: str, documents: List[str], query: str, ma
     )
 
     response = response.choices[0].message.content
+    response_length = len(enc.encode(response))
 
-    output_token_count += len(enc.encode(response))
+    output_token_count += response_length
+    output_token_count_placeholder.metric(label="Output tokens (gpt-4o encoding)", value=output_token_count, delta=response_length)
+
     return response
 
 def retrieve_documents(query: str, client: OpenAI):
     # Ask API to generate JSON list of candidate keyword search queries {query: ["search query 1", "search query 2", ...]}
     queries = extract_queries_from_response(
-        GENERATE_QUERIES_PROMPT.format(query_count=max_num_queries), 
-        [], 
-        query, 
-        max_new_tokens=min(256, max_new_tokens)
+        make_openai_request(
+            GENERATE_QUERIES_PROMPT.format(query_count=max_num_queries), 
+            [], 
+            query, 
+            max_new_tokens=min(256, max_new_tokens)
+        )
     )
     st.markdown("## Generated queries")
     for query in queries:
@@ -137,10 +144,10 @@ def retrieve_documents(query: str, client: OpenAI):
     all_papers = list(set(all_papers))
     
     for i in range(len(all_papers)):
-        all_papers[i] = f"# Document {i + 1}\n{all_papers[i]}"
+        all_papers[i] = f"### Document {i + 1}\n## {all_papers[i]}"
     
     # Visual representation of the papers retrieved
-    best_papers = get_topk_documents(all_papers, query, top_k)
+    best_papers = get_topk_documents(fasttext_model, all_papers, query, top_k)
     return best_papers
 
 def answer_question(query: str):
@@ -177,11 +184,6 @@ def answer_question(query: str):
         )
 
 user_query = st.chat_input("What's your question?")
-# clear_chat_button = st.button("Clear chat")
-
-# if clear_chat_button:
-#     st.session_state.messages = []
-#     st.session_state.documents = []
 
 if user_query:
     st.session_state.messages = []
