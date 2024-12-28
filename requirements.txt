@@ -7,5 +7,4 @@ rich
 gensim
 scikit-learn
 stqdm
-requests
 tiktoken>=0.80.0
