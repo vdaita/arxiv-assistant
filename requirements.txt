@@ -1,7 +1,11 @@
-paperscraper
+arxiv
 pandas
 numpy
 openai
-chainlit
-sentence-transformers
-PyMuPDF
+streamlit
+rich
+gensim
+scikit-learn
+stqdm
+requests
+tiktoken>=0.80.0
